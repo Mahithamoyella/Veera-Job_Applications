@@ -13,32 +13,18 @@ const PDFDocument = require('pdfkit');
 const app = express();
 const port = 3073;
 
-// Enhanced PostgreSQL configuration
+// PostgreSQL configuration
 const pool = new Pool({
     user: 'postgres',
     host: 'postgres',
     database: 'job_applications',
     password: 'admin834',
     port: 5432,
-    max: 20,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000,
 });
 
 // Middleware
 app.use(cors());
 app.use(express.json());
-
-// Verify uploads directory exists at startup
-async function verifyUploadsDirectory() {
-    try {
-        await fs.mkdir(path.join(__dirname, 'Uploads'), { recursive: true });
-        console.log('Uploads directory verified');
-    } catch (error) {
-        console.error('Failed to setup uploads directory:', error);
-        process.exit(1);
-    }
-}
 
 // Serve uploaded files statically
 app.use('/uploads', express.static(path.join(__dirname, 'Uploads')));
@@ -155,7 +141,7 @@ app.post('/api/applications', applicationUpload.fields([
             status: 'Pending'
         };
 
-        const baseUrl = `http://52.207.210.139:${port}/uploads/`;
+        const baseUrl = `http://54.159.175.17:${port}/Uploads/`;
         if (files.resume) {
             formData.documents.resume = {
                 name: files.resume[0].originalname,
@@ -217,13 +203,16 @@ app.post('/api/applications', applicationUpload.fields([
 app.get('/api/applications', async (req, res) => {
     try {
         const { search, status, page = 1, limit = 10 } = req.query;
+        console.log('Received query params:', { search, status, page, limit });
         const offset = (page - 1) * limit;
         let query = 'SELECT * FROM applications';
         const queryParams = [];
 
         let conditions = [];
         if (search) {
+            console.log('Processing search query:', search);
             const searchTerms = search.trim().split(/\s+/);
+            console.log('Raw search terms:', searchTerms);
 
             let name = null;
             let email = null;
@@ -248,16 +237,20 @@ app.get('/api/applications', async (req, res) => {
                     `personal_info->>'email' ILIKE $${queryParams.length + 2})`
                 );
                 queryParams.push(`%${name.trim()}%`, `%${email.trim()}%`);
+                console.log('Searching for name and email:', { name: name.trim(), email: email.trim() });
             } else if (name) {
                 conditions.push(`personal_info->>'name' ILIKE $${queryParams.length + 1}`);
                 queryParams.push(`%${name.trim()}%`);
+                console.log('Searching for name:', name.trim());
             } else if (email) {
                 conditions.push(`personal_info->>'email' ILIKE $${queryParams.length + 1}`);
                 queryParams.push(`%${email.trim()}%`);
+                console.log('Searching for email:', email.trim());
             } else if (search.startsWith('id:')) {
                 const id = search.split(':')[1].trim();
                 conditions.push(`id = $${queryParams.length + 1}`);
                 queryParams.push(parseInt(id));
+                console.log('Searching for id:', id);
             } else {
                 conditions.push(
                     `(personal_info->>'name' ILIKE $${queryParams.length + 1} OR ` +
@@ -265,11 +258,13 @@ app.get('/api/applications', async (req, res) => {
                     `personal_info->>'phone' ILIKE $${queryParams.length + 1})`
                 );
                 queryParams.push(`%${search}%`);
+                console.log('General search:', search);
             }
         }
         if (status && status !== 'all') {
             conditions.push(`status = $${queryParams.length + 1}`);
             queryParams.push(status);
+            console.log('Filtering by status:', status);
         }
 
         if (conditions.length > 0) {
@@ -278,6 +273,7 @@ app.get('/api/applications', async (req, res) => {
 
         query += ' ORDER BY date DESC LIMIT $' + (queryParams.length + 1) + ' OFFSET $' + (queryParams.length + 2);
         queryParams.push(parseInt(limit), parseInt(offset));
+        console.log('Executing SQL query:', query, 'with params:', queryParams);
 
         const result = await pool.query(query, queryParams);
         const totalResult = await pool.query(
@@ -285,6 +281,7 @@ app.get('/api/applications', async (req, res) => {
             queryParams.slice(0, queryParams.length - 2)
         );
 
+        console.log('Query result:', { applications: result.rows.length, total: parseInt(totalResult.rows[0].count) });
         res.json({ applications: result.rows, total: parseInt(totalResult.rows[0].count) });
     } catch (error) {
         console.error('Error fetching applications:', error);
@@ -318,149 +315,80 @@ app.patch('/api/applications/:id', async (req, res) => {
     }
 });
 
-// Upload offer documents - Improved Version
+// Upload offer documents
 app.post('/api/applications/upload', offerUpload.array('files', 10), async (req, res) => {
     try {
         const { applicationId } = req.body;
         const files = req.files;
 
-        // Validate application ID
-        if (!applicationId || isNaN(applicationId)) {
-            return res.status(400).json({ error: 'Valid application ID is required' });
+        if (!applicationId) {
+            return res.status(400).json({ error: 'Application ID is required' });
         }
 
         if (!files || files.length === 0) {
             return res.status(400).json({ error: 'No files uploaded' });
         }
 
-        // Verify application exists and is accepted
-        let appCheck;
-        try {
-            appCheck = await pool.query('SELECT status FROM applications WHERE id = $1', [applicationId]);
-            if (appCheck.rows.length === 0) {
-                return res.status(404).json({ error: 'Application not found' });
-            }
-            if (appCheck.rows[0].status !== 'Accepted') {
-                return res.status(403).json({ 
-                    error: 'Files can only be uploaded for accepted applications',
-                    currentStatus: appCheck.rows[0].status
-                });
-            }
-        } catch (dbError) {
-            console.error('Database error checking application:', dbError);
-            return res.status(500).json({ error: 'Failed to verify application status' });
+        const appCheck = await pool.query('SELECT status FROM applications WHERE id = $1', [applicationId]);
+        if (appCheck.rows.length === 0) {
+            return res.status(404).json({ error: 'Application not found' });
+        }
+        if (appCheck.rows[0].status !== 'Accepted') {
+            return res.status(403).json({ error: 'Files can only be uploaded for accepted applications' });
         }
 
-        // Verify application_files table exists
-        try {
-            await pool.query('SELECT 1 FROM application_files LIMIT 1');
-        } catch (tableError) {
-            if (tableError.code === '42P01') { // Table doesn't exist
-                console.log('Creating application_files table...');
-                await pool.query(`
-                    CREATE TABLE application_files (
-                        id UUID PRIMARY KEY,
-                        application_id INTEGER REFERENCES applications(id),
-                        name TEXT NOT NULL,
-                        path TEXT NOT NULL,
-                        size INTEGER NOT NULL,
-                        mime_type TEXT NOT NULL,
-                        hash TEXT NOT NULL,
-                        uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                `);
-            } else {
-                throw tableError;
-            }
-        }
-
-        // Process existing files
-        try {
-            const existingFilesResult = await pool.query(
-                'SELECT id, path FROM application_files WHERE application_id = $1',
-                [applicationId]
-            );
-            
-            for (const file of existingFilesResult.rows) {
-                const localPath = path.join(__dirname, 'Uploads', path.basename(file.path));
-                try {
-                    await fs.unlink(localPath);
-                    console.log(`Deleted existing file: ${localPath}`);
-                } catch (fsError) {
-                    if (fsError.code !== 'ENOENT') {
-                        console.error('Error deleting file:', fsError);
-                        throw fsError;
-                    }
+        const existingFilesResult = await pool.query(
+            'SELECT id, path FROM application_files WHERE application_id = $1',
+            [applicationId]
+        );
+        for (const file of existingFilesResult.rows) {
+            const localPath = path.join(__dirname, 'Uploads', path.basename(file.path));
+            try {
+                await fs.unlink(localPath);
+            } catch (fsError) {
+                if (fsError.code !== 'ENOENT') {
+                    throw fsError;
                 }
-                await pool.query('DELETE FROM application_files WHERE id = $1', [file.id]);
             }
-        } catch (cleanupError) {
-            console.error('Error cleaning up existing files:', cleanupError);
-            return res.status(500).json({ error: 'Failed to clean up existing files' });
+            await pool.query('DELETE FROM application_files WHERE id = $1', [file.id]);
         }
 
-        // Process new files
-        const baseUrl = `http://54.159.175.17:${port}/uploads/`;
+        const baseUrl = `http://54.159.175.17:${port}/Uploads/`;
         const fileRecords = [];
 
         for (const file of files) {
-            try {
-                const fileBuffer = await fs.readFile(file.path);
-                const hash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+            const fileBuffer = await fs.readFile(file.path);
+            const hash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
 
-                const fileId = uuidv4();
-                const fileRecord = {
-                    id: fileId,
-                    application_id: parseInt(applicationId),
-                    name: file.originalname,
-                    path: `${baseUrl}${file.filename}`,
-                    size: file.size,
-                    mime_type: file.mimetype,
-                    hash: hash
-                };
+            const fileId = uuidv4();
+            const fileRecord = {
+                id: fileId,
+                application_id: parseInt(applicationId),
+                name: file.originalname,
+                path: `${baseUrl}${file.filename}`,
+                size: file.size,
+                mime_type: file.mimetype,
+                hash: hash
+            };
 
-                await pool.query(
-                    'INSERT INTO application_files (id, application_id, name, path, size, mime_type, hash) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-                    [fileId, fileRecord.application_id, fileRecord.name, fileRecord.path, fileRecord.size, fileRecord.mime_type, fileRecord.hash]
-                );
+            await pool.query(
+                'INSERT INTO application_files (id, application_id, name, path, size, mime_type, hash) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+                [fileId, fileRecord.application_id, fileRecord.name, fileRecord.path, fileRecord.size, fileRecord.mime_type, fileRecord.hash]
+            );
 
-                fileRecords.push(fileRecord);
-                console.log(`Successfully processed file: ${file.originalname}`);
-            } catch (fileError) {
-                console.error(`Error processing file ${file.originalname}:`, fileError);
-                // Attempt to clean up the failed file
-                try {
-                    await fs.unlink(file.path);
-                } catch (unlinkError) {
-                    console.error('Error cleaning up failed file:', unlinkError);
-                }
-                // Continue with next file rather than failing entire request
-                continue;
-            }
+            fileRecords.push(fileRecord);
         }
 
-        if (fileRecords.length === 0) {
-            return res.status(500).json({ error: 'Failed to process any files' });
-        }
-
-        res.status(201).json({ 
-            message: 'Files uploaded successfully', 
-            files: fileRecords,
-            count: fileRecords.length
-        });
-
+        res.status(201).json({ message: 'Files uploaded successfully', files: fileRecords });
     } catch (error) {
-        console.error('Error in upload endpoint:', error);
+        console.error('Error uploading files:', error);
         let errorMessage = 'Failed to upload files';
         if (error.message.includes('LIMIT_FILE_SIZE')) {
             errorMessage = 'One or more files exceed the 10MB limit';
         } else if (error.message.includes('Only PDF, DOCX, JPG, JPEG, and PNG files are allowed')) {
             errorMessage = error.message;
         }
-        res.status(500).json({ 
-            error: errorMessage,
-            details: process.env.NODE_ENV === 'development' ? error.message : undefined
-        });
+        res.status(500).json({ error: errorMessage });
     }
 });
 
@@ -582,21 +510,13 @@ app.delete('/api/applications/files/:fileId', async (req, res) => {
     }
 });
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-    res.status(200).json({ status: 'healthy' });
-});
-
 // Start server
-async function startServer() {
+app.listen(port, async () => {
     try {
-        await verifyUploadsDirectory();
         await pool.connect();
-        console.log(`Server running on http://52.207.210.139:${port}`);
+        console.log(`Server running on http://54.159.175.17:${port}`);
     } catch (error) {
-        console.error('Failed to start server:', error);
+        console.error('Failed to connect to database:', error);
         process.exit(1);
     }
-}
-
-app.listen(port, startServer);
+});
