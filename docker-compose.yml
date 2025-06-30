@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:14
+    container_name: jobapp-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: admin834
+      POSTGRES_DB: job_applications
+    ports:
+      - "5471:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - jobapp-network
+
+  backend:
+    build: ./Backend
+    container_name: jobapp-backend
+    ports:
+      - "3073:3073"
+    depends_on:
+      - postgres
+    volumes:
+      - ./Backend/uploads:/app/Uploads
+    networks:
+      - jobapp-network
+
+  frontend:
+    build: ./Frontend
+    container_name: jobapp-frontend
+    ports:
+      - "8096:80"
+    networks:
+      - jobapp-network
+
+  hr:
+    build: ./HR
+    container_name: jobapp-hr
+    ports:
+      - "8097:80"
+    networks:
+      - jobapp-network
+
+  view_offer:
+    build: ./View_offer
+    container_name: jobapp-view-offer
+    ports:
+      - "8098:80"
+    networks:
+      - jobapp-network
+
+volumes:
+  postgres_data:
+
+networks:
+  jobapp-network:
+    driver: bridge
+
