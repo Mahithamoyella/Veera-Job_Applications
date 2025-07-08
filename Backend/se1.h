@@ -519,4 +519,8 @@ app.listen(port, async () => {
         console.error('Failed to connect to database:', error);
         process.exit(1);
     }
+<<<<<<< HEAD
 });
+=======
+});
+>>>>>>> 0fb7184cbe34b179abad20305712dd5ba169f3f0
