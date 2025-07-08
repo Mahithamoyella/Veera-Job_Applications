@@ -13,32 +13,18 @@ const PDFDocument = require('pdfkit');
 const app = express();
 const port = 3073;
 
-// Enhanced PostgreSQL configuration
+// PostgreSQL configuration
 const pool = new Pool({
     user: 'postgres',
     host: 'postgres',
     database: 'job_applications',
     password: 'admin834',
     port: 5432,
-    max: 20,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000,
 });
 
 // Middleware
 app.use(cors());
 app.use(express.json());
-
-// Verify uploads directory exists at startup
-async function verifyUploadsDirectory() {
-    try {
-        await fs.mkdir(path.join(__dirname, 'Uploads'), { recursive: true });
-        console.log('Uploads directory verified');
-    } catch (error) {
-        console.error('Failed to setup uploads directory:', error);
-        process.exit(1);
-    }
-}
 
 // Serve uploaded files statically
 app.use('/uploads', express.static(path.join(__dirname, 'Uploads')));
@@ -217,13 +203,16 @@ app.post('/api/applications', applicationUpload.fields([
 app.get('/api/applications', async (req, res) => {
     try {
         const { search, status, page = 1, limit = 10 } = req.query;
+        console.log('Received query params:', { search, status, page, limit });
         const offset = (page - 1) * limit;
         let query = 'SELECT * FROM applications';
         const queryParams = [];
 
         let conditions = [];
         if (search) {
+            console.log('Processing search query:', search);
             const searchTerms = search.trim().split(/\s+/);
+            console.log('Raw search terms:', searchTerms);
 
             let name = null;
             let email = null;
@@ -248,16 +237,20 @@ app.get('/api/applications', async (req, res) => {
                     `personal_info->>'email' ILIKE $${queryParams.length + 2})`
                 );
                 queryParams.push(`%${name.trim()}%`, `%${email.trim()}%`);
+                console.log('Searching for name and email:', { name: name.trim(), email: email.trim() });
             } else if (name) {
                 conditions.push(`personal_info->>'name' ILIKE $${queryParams.length + 1}`);
                 queryParams.push(`%${name.trim()}%`);
+                console.log('Searching for name:', name.trim());
             } else if (email) {
                 conditions.push(`personal_info->>'email' ILIKE $${queryParams.length + 1}`);
                 queryParams.push(`%${email.trim()}%`);
+                console.log('Searching for email:', email.trim());
             } else if (search.startsWith('id:')) {
                 const id = search.split(':')[1].trim();
                 conditions.push(`id = $${queryParams.length + 1}`);
                 queryParams.push(parseInt(id));
+                console.log('Searching for id:', id);
             } else {
                 conditions.push(
                     `(personal_info->>'name' ILIKE $${queryParams.length + 1} OR ` +
@@ -265,11 +258,13 @@ app.get('/api/applications', async (req, res) => {
                     `personal_info->>'phone' ILIKE $${queryParams.length + 1})`
                 );
                 queryParams.push(`%${search}%`);
+                console.log('General search:', search);
             }
         }
         if (status && status !== 'all') {
             conditions.push(`status = $${queryParams.length + 1}`);
             queryParams.push(status);
+            console.log('Filtering by status:', status);
         }
 
         if (conditions.length > 0) {
@@ -278,6 +273,7 @@ app.get('/api/applications', async (req, res) => {
 
         query += ' ORDER BY date DESC LIMIT $' + (queryParams.length + 1) + ' OFFSET $' + (queryParams.length + 2);
         queryParams.push(parseInt(limit), parseInt(offset));
+        console.log('Executing SQL query:', query, 'with params:', queryParams);
 
         const result = await pool.query(query, queryParams);
         const totalResult = await pool.query(
@@ -285,6 +281,7 @@ app.get('/api/applications', async (req, res) => {
             queryParams.slice(0, queryParams.length - 2)
         );
 
+        console.log('Query result:', { applications: result.rows.length, total: parseInt(totalResult.rows[0].count) });
         res.json({ applications: result.rows, total: parseInt(totalResult.rows[0].count) });
     } catch (error) {
         console.error('Error fetching applications:', error);
@@ -318,7 +315,7 @@ app.patch('/api/applications/:id', async (req, res) => {
     }
 });
 
-// Upload offer documents - Improved Version
+// Upload offer documents
 app.post('/api/applications/upload', offerUpload.array('files', 10), async (req, res) => {
     try {
         console.log('Upload request received:', req.body); // Debug log
@@ -374,19 +371,7 @@ app.post('/api/applications/upload', offerUpload.array('files', 10), async (req,
                 Object.values(fileRecord)
             );
 
-                fileRecords.push(fileRecord);
-                console.log(`Successfully processed file: ${file.originalname}`);
-            } catch (fileError) {
-                console.error(`Error processing file ${file.originalname}:`, fileError);
-                // Attempt to clean up the failed file
-                try {
-                    await fs.unlink(file.path);
-                } catch (unlinkError) {
-                    console.error('Error cleaning up failed file:', unlinkError);
-                }
-                // Continue with next file rather than failing entire request
-                continue;
-            }
+            fileRecords.push(fileRecord);
         }
 
         res.status(201).json({ 
@@ -536,21 +521,13 @@ app.delete('/api/applications/files/:fileId', async (req, res) => {
     }
 });
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-    res.status(200).json({ status: 'healthy' });
-});
-
 // Start server
-async function startServer() {
+app.listen(port, async () => {
     try {
-        await verifyUploadsDirectory();
         await pool.connect();
         console.log(`Server running on http://3.86.112.83:${port}`);
     } catch (error) {
-        console.error('Failed to start server:', error);
+        console.error('Failed to connect to database:', error);
         process.exit(1);
     }
-}
-
-app.listen(port, startServer);
+});
