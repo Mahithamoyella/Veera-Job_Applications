@@ -327,7 +327,6 @@ app.post('/api/applications/upload', offerUpload.array('files', 10), async (req,
             return res.status(400).json({ error: 'No files were uploaded' });
         }
 
-<<<<<<< HEAD
         const { applicationId } = req.body;
         console.log('Application ID:', applicationId); // Debug log
         
@@ -374,107 +373,6 @@ app.post('/api/applications/upload', offerUpload.array('files', 10), async (req,
                 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
                 Object.values(fileRecord)
             );
-=======
-        // Validate application ID
-        if (!applicationId || isNaN(applicationId)) {
-            return res.status(400).json({ error: 'Valid application ID is required' });
-        }
-
-        if (!files || files.length === 0) {
-            return res.status(400).json({ error: 'No files uploaded' });
-        }
-
-        // Verify application exists and is accepted
-        let appCheck;
-        try {
-            appCheck = await pool.query('SELECT status FROM applications WHERE id = $1', [applicationId]);
-            if (appCheck.rows.length === 0) {
-                return res.status(404).json({ error: 'Application not found' });
-            }
-            if (appCheck.rows[0].status !== 'Accepted') {
-                return res.status(403).json({ 
-                    error: 'Files can only be uploaded for accepted applications',
-                    currentStatus: appCheck.rows[0].status
-                });
-            }
-        } catch (dbError) {
-            console.error('Database error checking application:', dbError);
-            return res.status(500).json({ error: 'Failed to verify application status' });
-        }
-
-        // Verify application_files table exists
-        try {
-            await pool.query('SELECT 1 FROM application_files LIMIT 1');
-        } catch (tableError) {
-            if (tableError.code === '42P01') { // Table doesn't exist
-                console.log('Creating application_files table...');
-                await pool.query(`
-                    CREATE TABLE application_files (
-                        id UUID PRIMARY KEY,
-                        application_id INTEGER REFERENCES applications(id),
-                        name TEXT NOT NULL,
-                        path TEXT NOT NULL,
-                        size INTEGER NOT NULL,
-                        mime_type TEXT NOT NULL,
-                        hash TEXT NOT NULL,
-                        uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                `);
-            } else {
-                throw tableError;
-            }
-        }
-
-        // Process existing files
-        try {
-            const existingFilesResult = await pool.query(
-                'SELECT id, path FROM application_files WHERE application_id = $1',
-                [applicationId]
-            );
-            
-            for (const file of existingFilesResult.rows) {
-                const localPath = path.join(__dirname, 'Uploads', path.basename(file.path));
-                try {
-                    await fs.unlink(localPath);
-                    console.log(`Deleted existing file: ${localPath}`);
-                } catch (fsError) {
-                    if (fsError.code !== 'ENOENT') {
-                        console.error('Error deleting file:', fsError);
-                        throw fsError;
-                    }
-                }
-                await pool.query('DELETE FROM application_files WHERE id = $1', [file.id]);
-            }
-        } catch (cleanupError) {
-            console.error('Error cleaning up existing files:', cleanupError);
-            return res.status(500).json({ error: 'Failed to clean up existing files' });
-        }
-
-        // Process new files
-        const baseUrl = `http://54.159.175.17:${port}/uploads/`;
-        const fileRecords = [];
-
-        for (const file of files) {
-            try {
-                const fileBuffer = await fs.readFile(file.path);
-                const hash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
-
-                const fileId = uuidv4();
-                const fileRecord = {
-                    id: fileId,
-                    application_id: parseInt(applicationId),
-                    name: file.originalname,
-                    path: `${baseUrl}${file.filename}`,
-                    size: file.size,
-                    mime_type: file.mimetype,
-                    hash: hash
-                };
-
-                await pool.query(
-                    'INSERT INTO application_files (id, application_id, name, path, size, mime_type, hash) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-                    [fileId, fileRecord.application_id, fileRecord.name, fileRecord.path, fileRecord.size, fileRecord.mime_type, fileRecord.hash]
-                );
->>>>>>> 0fb7184cbe34b179abad20305712dd5ba169f3f0
 
                 fileRecords.push(fileRecord);
                 console.log(`Successfully processed file: ${file.originalname}`);
